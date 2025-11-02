@@ -1,5 +1,5 @@
 > [!CAUTION]
-> This Project is no longer under development since YouTube Music now officially endorses the use of [TuneMyMusic](https://www.tunemymusic.com/?mode=ytm&fsource=spotify) (free with YT Premium) to transfer Playlists from Spotify to YT Music. This service seems to work quite good for its purpose and does not have the same technical restrictions this project has in regards to the amount of playlists you can create per day.
+> This Project is no longer under development since YouTube Music now [officially endorses](https://support.google.com/youtubemusic/answer/14729358) the use of [TuneMyMusic](https://www.tunemymusic.com/?mode=ytm&fsource=spotify) (free with YT Premium) to transfer Playlists from Spotify to YT Music. This service seems to work quite good for its purpose and does not have the same technical restrictions this project has in regards to the amount of playlists you can create per day.
 
 # SPT2YTM - Spotify to YouTube Music Playlist Converter
 This project provides a way to migrate all of your playlists from Spotify to YouTube Music. Although it is not as user friendly as other online tools that advertise to do the same job, it does not[*](#limitations) have a limit on how many songs you can convert.
