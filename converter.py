@@ -1,12 +1,13 @@
-import json
 import os
-import ytmusicapi
+import json
+import tqdm
 import spotipy
-from spotipy.oauth2 import SpotifyOAuth
-from ytmusicapi import YTMusic
+import ytmusicapi
 from time import time
 from time import sleep
 from functools import reduce
+from ytmusicapi import YTMusic
+from spotipy.oauth2 import SpotifyOAuth
 
 def get_all_spotify_songs_from_query_result(items):
     output = []
@@ -22,31 +23,44 @@ def find_all_spotify_songs_in_playlist(playlist_id, sp):
     songs = []
     found_all = False
     offset = 0
-    while(found_all == False):
-        result = sp.playlist_items(playlist_id, limit = 100, offset = offset)["items"]
-        if(result == []):
+    pbar = tqdm(desc="Fetching playlist songs", unit="songs")
+
+    while not found_all:
+        result = sp.playlist_items(playlist_id, limit=100, offset=offset)["items"]
+        if not result:
             found_all = True
         else:
-            songs.extend(get_all_spotify_songs_from_query_result(result))
+            tracks = get_all_spotify_songs_from_query_result(result)
+            songs.extend(tracks)
             offset += 100
+            pbar.update(len(tracks))
+
+    pbar.close()
     return songs
+
 
 def find_favorite_spotify_songs(sp):
     found_all = False
     favs = []
     offset = 0
-    print("fetching favorites (this may take a while)...")
-    while(found_all == False):
-        result = sp.current_user_saved_tracks(offset = offset, limit = 50)['items']
-        favs.extend(get_all_spotify_songs_from_query_result(result))
-        offset += 50
-        if(result == []): 
-            found_all = True
+    print("Fetching favorites (this may take a while)...")
+    pbar = tqdm(desc="Liked Songs", unit="songs")
 
-    if(favs != []):
+    while not found_all:
+        result = sp.current_user_saved_tracks(offset=offset, limit=50)['items']
+        if not result:
+            found_all = True
+        else:
+            tracks = get_all_spotify_songs_from_query_result(result)
+            favs.extend(tracks)
+            offset += 50
+            pbar.update(len(tracks))
+
+    pbar.close()
+    if favs:
         return {
-            "name" : "your favorites from spotify",
-            "description" : "this playlist contains all your liked songs from spotify",
+            "name": "your favorites from spotify",
+            "description": "this playlist contains all your liked songs from spotify",
             "songs": favs
         }
     return []
@@ -55,126 +69,138 @@ def find_all_spotify_playlists(sp):
     found_all = False
     offset = 0
     spotify_playlists = []
-    spotify_playlists.append(find_favorite_spotify_songs(sp))
-    while(found_all == False):
+
+    fav_playlist = find_favorite_spotify_songs(sp)
+    if fav_playlist:
+        spotify_playlists.append(fav_playlist)
+
+    print("Fetching playlists list...")
+    all_playlists = []
+
+    while not found_all:
         result = sp.current_user_playlists(limit=50, offset=offset)
-        for item in result['items']:
-            print("fetching playlist", item["name"], "...")
-            songs = find_all_spotify_songs_in_playlist(item["id"], sp)
-            spotify_playlists.append({
-                "name" : item["name"],
-                "description": item["description"],
-                "songs": songs
-            })
-        offset += 50
-        if(result["items"]==[]):
+        items = result['items']
+        if not items:
             found_all = True
-    print(len(spotify_playlists), "playlists found!")
+        else:
+            all_playlists.extend(items)
+            offset += 50
+
+    print(f"{len(all_playlists)} playlists found. Fetching songs...")
+    for item in tqdm(all_playlists, desc="Playlists", unit="playlist"):
+        songs = find_all_spotify_songs_in_playlist(item["id"], sp)
+        spotify_playlists.append({
+            "name": item["name"],
+            "description": item["description"],
+            "songs": songs
+        })
+
+    print(f"{len(spotify_playlists)} playlists total (including favorites).")
     return spotify_playlists
+
 
 def get_all_ytm_ids(spotify_playlists):
     output = []
     not_found_songs = []
     found_songs = {}
-    print("Looking for all your Spotify songs on YouTube Music. This will take about", 
-        int(reduce(lambda x,y: x+y, map(lambda x: len(x["songs"]), spotify_playlists))*0.005),
-        "minutes to complete.")
+
+    total_songs = sum(len(p["songs"]) for p in spotify_playlists)
+    estimated_time = int(total_songs * 0.005)
+    print(f"Looking for all your Spotify songs on YouTube Music. This will take about {estimated_time} minutes to complete.")
     start_time = time()
-    # replace all query strings with corresponding yt music ids
-    for playlist in spotify_playlists:
+
+    for playlist in tqdm(spotify_playlists, desc="Playlists", unit="playlist"):
         song_ids = []
         not_found = []
-        progress = 0
 
-        print("Fetching YouTube Music song IDs for songs in:", playlist["name"])
-        for song_title in playlist["songs"]:
-            progress += 1
-            if(progress % 10 == 0 or progress == len(playlist["songs"])):
-                print(progress, "/", len(playlist["songs"]))
-
+        print(f"\nFetching YouTube Music song IDs for songs in: {playlist['name']}")
+        for song_title in tqdm(playlist["songs"], desc=playlist["name"], unit="song", leave=False):
             # skip query if song has been searched before
-            if(song_title in found_songs.keys()):
+            if song_title in found_songs:
                 song_ids.append(found_songs[song_title])
-                progress
                 continue
-            
-            # search for song title on yt music
-            result = next(iter(ytmusic.search(song_title, limit = 1, filter = "songs")), None)
-            if(result is not None):
+
+            # search on YT Music
+            result = next(iter(ytmusic.search(song_title, limit=1, filter="songs")), None)
+            if result is not None:
                 song_id = result["videoId"]
                 found_songs[song_title] = song_id
                 song_ids.append(song_id)
             else:
-                print("Song", song_title, "could not be found. All songs which weren't added are getting shown again at the end.")
+                print(f"  Song not found: {song_title}")
                 not_found.append(song_title)
 
-        if(not_found != []):
-            not_found_songs.append({playlist["name"]:not_found})
-        output.append(playlist)
-        output[-1]["songs"] = song_ids
+        if not_found:
+            not_found_songs.append({playlist["name"]: not_found})
 
-    print("Done fetching all", len(found_songs.keys()), "individual songs.")
-    print("Fetched song IDs from all songs in", time()-start_time, "s.")
-    if(not_found_songs != []):
-        with open("not_found_songs.json", "w") as json_file:
-            json_file.write(json.dumps(not_found_songs, indent=4))
+        playlist["songs"] = song_ids
+        output.append(playlist)
+
+    print(f"\nDone fetching {len(found_songs)} individual songs in {round(time() - start_time, 2)} seconds.")
+    
+    if not_found_songs:
+        with open("not_found_songs.json", "w") as f:
+            json.dump(not_found_songs, f, indent=4)
+
     return output
 
 def like_all_songs(songs):
-    print("Do you want me to like all the songs in your 'favorite songs' playlist, so that they appear in YouTubes automatically generated playlist?")
-    print("This will take a while, since YouTube has restrictions regarding how fast you can like songs.")
+    print("\nDo you want me to like all the songs in your 'favorite songs' playlist so that they appear in YouTube's auto-generated playlist?")
+    print("Note: This may take a while due to YouTube's rate limits.")
     confirmation = input("Enter 'y' for yes, anything else for no: ")
-    if(confirmation in ["y", "Y", "yes", "Yes"]):
-        counter = 1
-        for song in songs[::-1]:
-            counter += 1
-            if(counter % 20 == 0 or counter == len(songs)):
-                print(counter, "/", len(songs))
-            response_check = ytmusic.rate_song(song, "LIKE")["actions"][0]["addToToastAction"]["item"]["notificationActionRenderer"]["responseText"]["runs"][0]["text"]
-            while(response_check != "Saved to liked songs"):
+
+    if confirmation.lower() in ['y', 'yes']:
+        for song in tqdm(songs[::-1], desc="Liking songs", unit="song"):
+            response = ytmusic.rate_song(song, "LIKE")
+            text = response["actions"][0]["addToToastAction"]["item"]["notificationActionRenderer"]["responseText"]["runs"][0]["text"]
+            while text != "Saved to liked songs":
                 sleep(1)
-                response_check = ytmusic.rate_song(song, "LIKE")["actions"][0]["addToToastAction"]["item"]["notificationActionRenderer"]["responseText"]["runs"][0]["text"]
+                response = ytmusic.rate_song(song, "LIKE")
+                text = response["actions"][0]["addToToastAction"]["item"]["notificationActionRenderer"]["responseText"]["runs"][0]["text"]
 
 def create_all_playlists(playlists_in, ytmusic):
-    print("Creating YouTube Music playlists. You're almost done!")
-    playlists = playlists_in[::-1] # reverse playlist, so that the oldest playlist is created first
-    i = 0
-    while i < len(playlists):
-        playlist = playlists[i]
-        try:
-            ytmusic.create_playlist(
-                playlist["name"].replace("<", "(").replace(">", ")"),     # for whatever reason these symbols arent allowed in playlist names
-                playlist["description"],
-                video_ids = playlist["songs"]
-            )
-            print("Created playlist", playlist["name"] + ".")
-            if(playlist["name"]=="your favorites from spotify"):
-                like_all_songs(playlist["songs"])
-            i+=1
-        except Exception as error:
-            print("An error accured:", error)
-            print("If you see this, it is very likely, that you tried to create too many playlists too quickly.")
-            print("YouTube Music only allows you to create 25 playlists every 6h.")
-            with open("remaining.json", "w") as json_file:
-                json_file.write(json.dumps(playlists[i:], indent=4))
-            print("To add the remaining playlists, just rerun this program in 6h. The remaining playlists are saved in the file remaining.json")
-            i = len(yt_playlists)
+    print("\nCreating YouTube Music playlists. You're almost done!")
+
+    playlists = playlists_in[::-1]  # oldest first
+    with tqdm(total=len(playlists), desc="Creating playlists", unit="playlist") as pbar:
+        i = 0
+        while i < len(playlists):
+            playlist = playlists[i]
+            try:
+                ytmusic.create_playlist(
+                    playlist["name"].replace("<", "(").replace(">", ")"),
+                    playlist["description"],
+                    video_ids=playlist["songs"]
+                )
+                print("Created playlist:", playlist["name"])
+                if playlist["name"] == "your favorites from spotify":
+                    like_all_songs(playlist["songs"])
+                i += 1
+                pbar.update(1)
+            except Exception as error:
+                print("An error occurred:", error)
+                print("You probably hit YouTube Music's 25 playlists / 6 hours limit.")
+                with open("remaining.json", "w") as f:
+                    json.dump(playlists[i:], f, indent=4)
+                print("You can rerun this script after 6h to finish. Remaining playlists saved to 'remaining.json'.")
+                break
         else:
-            # empty remaining.json file
-            with open("remaining.json", "w") as json_file:
-                json_file.write(json.dumps([], indent=4))
+            # Clear the file if no errors
+            with open("remaining.json", "w") as f:
+                json.dump([], f, indent=4)
 
 def print_not_added_songs():
-    if(os.path.isfile("not_found_songs.json")):
-        with open("not_found_songs.json") as json_file:
+    if os.path.isfile("not_found_songs.json"):
+        with open("not_found_songs.json", "r") as json_file:
             not_found_songs = json.load(json_file)
-            print("Couldn't find the following song:")
-            for playlist in not_found_songs:
-                for playlist_name, songs in playlist.items():
-                    print("-----", playlist_name, "-----")
-                    for song in songs:
-                        print("-", song)
-        print("This has also been saved for later use in the file not_found_songs.json")
+
+        print("\nCouldn't find the following songs:")
+        for playlist in not_found_songs:
+            for playlist_name, songs in playlist.items():
+                print(f"\n----- {playlist_name} -----")
+                for song in songs:
+                    print(f"- {song}")
+        print("\nThis has also been saved for later use in the file 'not_found_songs.json'.")
 
 # --------------
 # PROGRAMM START
@@ -193,13 +219,11 @@ total_time = time()
 
 # get or generate yt music credentials
 print("Getting YouTube Music credentials...")
-if(not os.path.isfile("oauth.json")):
+if(not os.path.isfile("browser.json")):
     print("Generating YouTube API tokens, please follow the instructions in the browser window, which will pop up shortly. After completion, continue here.")
     sleep(10)
-    oauth = ytmusicapi.setup_oauth(open_browser = True)
-    with open("oauth.json", "w") as json_file:
-        json_file.write(json.dumps(oauth, indent=4))
-ytmusic = YTMusic("oauth.json")
+    os.system("ytmusicapi browser")
+ytmusic = YTMusic("browser.json")
 
 # skip fetching playlists if they have already been fetched
 if(os.path.isfile("remaining.json") or os.path.isfile("yt_playlists.json")):
@@ -245,7 +269,7 @@ else:   # start fetching needed data
                             scope = "user-library-read",
                             client_id = credentials["spotify_client_id"],
                             client_secret = credentials["spotify_client_secret"],
-                            redirect_uri = "http://localhost:3000"))
+                            redirect_uri = "http://127.0.0.1:3000"))
 
         playlists = find_all_spotify_playlists(sp)
         with open("spotify_playlists.json", "w") as json_file:

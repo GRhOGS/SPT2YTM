@@ -7,3 +7,6 @@ spotify_playlists.json
 yt_playlists.json
 not_found_songs.json
 remaining.json
+browser.json
+yt_id_cache.json
+liked_songs_cache.json
